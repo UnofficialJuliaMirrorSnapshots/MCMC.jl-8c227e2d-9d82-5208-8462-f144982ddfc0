@@ -1,0 +1,615 @@
+.. _states:
+
+Variable States
+==========================================================================================
+
+.. _rationale:
+
+Rationale behind states
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Being geared towards statistics, ``Klara`` variables include parameters, data, transformations and constants, the specifics of
+which will be delineated in :ref:`variables`. A variable, be it stochastic or deterministic, can take a value, that is it can
+have a *state*. Variables and their states are maintained in two distinct type systems in ``Klara``.
+
+The functionality of a variable is enclosed by its type instance. For a example, a typical parameter consists of its
+probability distribution, log-likelihood or log-prior fields.
+
+It is possible to store the value of a multivariate variable in a vector. However, it might be required to save additional
+information. For example, the value of a parameter's log-likelihood and associated gradient might be of interest. Variable
+state types exist to accommodate such states that comprise two or more entities.
+
+From an object-oriented programming (OOP) standpoint, variable types correspond to methods while variable state types
+constitute data members. ``Klara`` does not merge the functional and data components into a single type, which would had been
+the analogous of a class in OOP terms. The main reasoning behind Klara's compartmentalization of variables and their states is
+code reusability. For instance, it becomes possible for different variables to share the same state type; more generally,
+adhering to Julia's multiple dispatch is facilitated.
+
+Moreover, keeping states separate from variables helps cater to user-specific problems. Existing functionality can be
+deployed on user-defined states tailored to the problem at hand.
+
+.. _builtin_states:
+
+Built-in states
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The state type system comprises two abstract and other non-abstract types. :numref:`_builtin_states_listing` displays the
+hierarchy of built-in state types. The two abstract types are ``VariableState`` and its sub-type ``ParameterState``. The
+non-abstract states put forward sensible defaults aimed at covering conventional use-cases. ``Klara``’s existing functionality
+relies on these defaults, yet it is possible to extend the package by defining custom state types.
+
+Variable states are categorized as univariate or multivariate. Parameter states are further classified as discrete or
+continuous. To make these distinctions, parametric abstract state types are employed by importing the ``VariateForm`` and
+``ValueSupport`` classification scheme from ``Distributions``. Every possible category is designated a unique non-abstract
+state type; for instance, ``BasicContMuvParameterState`` hosts a continuous multivariate parameter state.
+
+The most common field, appearing in all built-in non-abstract state types, is called ``value``. For example, in the context
+of MCMC, ``value`` would hold the current or proposed state at each iteration of the sampler. Each state type and its
+associated methods will be elaborated in the following sections.
+
+.. code-block:: none
+  :name: _builtin_states_listing
+  :caption: State type hierarchy in ``Klara``
+
+  VariableState
+  |
+  +-- BasicUnvVariableState
+  |
+  +-- BasicMuvVariableState
+  |
+  +-- BasicMavVariableState
+  |    
+  +-- ParameterState
+      |  
+      +-- BasicDiscUnvParameterState
+      |
+      +-- BasicDiscMuvParameterState
+      |
+      +-- BasicContUnvParameterState
+      |
+      +-- BasicContMuvParameterState
+
+.. _abstract_states:
+
+Abstract states
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+The type system of ``VariateForm`` and ``ValueSupport`` from ``Distributions``
+(see :numref:`_variateform_valuesupport_types` and associated
+`documentation <http://distributionsjl.readthedocs.io/en/latest/types.html>`_ in ``Distributions``) is used for
+parameterizing abstract states in ``Klara``.
+
+.. code-block:: julia
+  :name: _variateform_valuesupport_types
+  :caption: ``VariateForm`` and ``ValueSupport`` type system from ``Distributions`` package
+  
+  abstract VariateForm
+  type Univariate    <: VariateForm end
+  type Multivariate  <: VariateForm end
+  type Matrixvariate <: VariateForm end
+
+  abstract ValueSupport
+  type Discrete   <: ValueSupport end
+  type Continuous <: ValueSupport end
+
+``VariableState`` is the root of ``Klara``’s variable state type hierarchy. It is defined as
+
+.. code-block:: julia
+
+  abstract VariableState{F<:VariateForm}
+
+Being parameterized by ``VariateForm``, the abstract type ``VariableState`` enables distinguishing between univariate,
+multivariate and matrix-variate variable states.
+
+``ParameterState`` is the root of ``Klara``’s parameter state types and an abstract sub-type of ``VariableState``. It is
+defined as
+
+.. code-block:: julia
+
+  abstract ParameterState{S<:ValueSupport, F<:VariateForm} <: VariableState{F}
+
+As seen from its parameterization, ``ParameterState`` makes it possible to organize parameter states by both the support of
+state space and the variate form.
+
+.. _basic_variable_states:
+
+Basic variable states
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+``Klara`` ships with three so-called basic variable state types, namely ``BasicUnvVariableState``, ``BasicMuvVariableState``
+and ``BasicMavVariableState``. These three types are used for encapsulating minimal information, that is the ``value`` of a
+variable state and possibly the associated ``size`` of ``value``.
+
+Each of these three basic state types corresponds to a specific variate form, whereas none of them is parameterized by the
+support of state space. Instead, each of them is parameterized by the type of ``Number`` of their ``value`` field, see
+:numref:`_variable_states`.
+
+.. table:: Basic variable states in ``Klara``.
+   :name: _variable_states
+   
+   +----------------------------------+----------------+-----------------+
+   | Variable state type              | ``value`` type | ``size`` type   |
+   +==================================+================+=================+
+   | BasicUnvVariableState{N<:Number} | N              | ✗               |
+   +----------------------------------+----------------+-----------------+
+   | BasicMuvVariableState{N<:Number} | Vector{N}      | Int             |
+   +----------------------------------+----------------+-----------------+
+   | BasicMavVariableState{N<:Number} | Matrix{N}      | Tuple{Int, Int} |
+   +----------------------------------+----------------+-----------------+
+
+In what follows, constructors are provided for the three basic variable types.
+
+BasicUnvVariableState
+------------------------------------------------------------------------------------------
+
+.. function:: BasicUnvVariableState{N<:Number}(value::N)
+
+  Construct a basic univariate variable state with some ``value``.
+   
+  Examples:
+   
+  .. code-block:: julia
+   
+    state = BasicUnvVariableState(1.)
+    # Klara.BasicUnvVariableState{Float64}(1.0)
+     
+    state.value
+    # 1.0
+     
+BasicMuvVariableState
+------------------------------------------------------------------------------------------
+
+.. function:: BasicMuvVariableState{N<:Number}(value::Vector{N})
+
+  Construct a basic multivariate variable state with some ``value``.
+   
+  Examples:
+   
+  .. code-block:: julia
+   
+    state = BasicMuvVariableState([1, 2])
+    # Klara.BasicMuvVariableState{Int64}([1, 2], 2)
+     
+    state.value
+    #  2-element Array{Int64, 1}:
+    #   1
+    #   2
+     
+    state.size
+    # 2
+
+.. function:: BasicMuvVariableState{N<:Number}(size::Int, ::Type{N}=Float64)
+
+  Construct a basic multivariate variable state with a ``value`` of specified ``size`` and element type.
+   
+  Examples:
+   
+  .. code-block:: julia
+   
+    BasicMuvVariableState(3, Float32)
+    # Klara.BasicMuvVariableState{Float32}(3-element Array{Float32, 1}, 2)
+    
+BasicMavVariableState
+------------------------------------------------------------------------------------------
+
+.. function:: BasicMavVariableState{N<:Number}(value::Matrix{N})
+
+  Construct a basic matrix-variate variable state with some ``value``.
+  
+  Examples:
+   
+  .. code-block:: julia
+   
+    state = BasicMavVariableState(eye(2))
+    # Klara.BasicMavVariableState{Float64}(2x2 Array{Float64, 2}, (2, 2))
+     
+    state.value
+    #  2x2 Array{Float64, 2}:
+    #   1.0  0.0
+    #   0.0  1.0
+      
+    state.size
+    # (2, 2)
+
+.. function:: BasicMavVariableState{N<:Number}(size::Tuple, ::Type{N}=Float64)
+
+  Construct a basic matrix-variate variable state with a ``value`` of specified ``size`` and element type.
+   
+  Examples:
+   
+  .. code-block:: julia
+   
+    BasicMavVariableState((3, 2), Float32)
+    # Klara.BasicMavVariableState{Int16}(3x2 Array{Float32, 2}, (3, 2))
+
+.. _basic_parameter_states:
+
+Basic parameter states
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+Four basic parameter state types are made available by ``Klara``, namely the discrete univariate
+``BasicDiscUnvParameterState``, discrete multivariate ``BasicDiscMuvParameterState``, continuous univariate
+``BasicContUnvParameterState`` and continuous multivariate ``BasicContMuvParameterState``, see :numref:`_parameter_states`.
+
+.. table:: Basic parameter states in ``Klara``.
+   :name: _parameter_states
+   
+   +---------------------------------------------------+--------------+--------------+
+   | Parameter state type                              | ValueSupport | VariateForm  |
+   +===================================================+==============+==============+
+   | BasicDiscUnvParameterState{NI<:Integer, NR<:Real} | Discrete     | Univariate   |
+   +---------------------------------------------------+--------------+--------------+
+   | BasicDiscMuvParameterState{NI<:Integer, NR<:Real} | Discrete     | Multivariate |
+   +---------------------------------------------------+--------------+--------------+
+   | BasicContUnvParameterState{NR<:Real}              | Continuous   | Univariate   |
+   +---------------------------------------------------+--------------+--------------+
+   | BasicContMuvParameterState{NR<:Real}              | Continuous   | Multivariate |
+   +---------------------------------------------------+--------------+--------------+
+ 
+Both basic parameter states and basic variable states contain the state's ``value`` and value's ``size``. Additionally, basic
+parameter states contain fields that hold information about the target distribution of the associated parameter and about
+sampling diagnostics, see :numref:`_parameter_state_fields`.
+
+The discrete states ``BasicDiscUnvParameterState`` and ``BasicDiscMuvParameterState`` are parameterized by the element type
+``NI<:Integer`` of state ``value`` and by the element type ``NR<:Real`` of target-related fields. On the other hand, the
+continuous states ``BasicContUnvParameterState`` and ``BasicContMuvParameterState`` are parameterized by the common element
+type ``NR<:Real`` of state ``value`` and of target-related fields.
+
+A parameter is characterized by its target, that is by its possibly unnormalized distribution. A target is specified via a
+``Distribution`` or via a possibly unnormalized probability distribution ``function`` (PDF). Either way, the
+``state.logtarget`` field of a parameter ``state`` stores the logarithm of the associated PDF evaluated at ``state.value``.
+
+A posterior target is proportional to a likelihood times a prior. Thus, if a parameter is specified via its posterior target,
+the ``state.loglikelihood`` and ``state.logprior`` fields of the associated parameter ``state`` enable storing the logarithm
+of the likelihood function and prior PDF evaluated at ``state.value``. Apparently, ``state.logtarget`` is equal to the sum of
+``state.loglikelihood`` and ``state.logprior``.
+
+.. tabularcolumns:: |p{3cm}|p{2.4cm}|p{2.4cm}|p{2.4cm}|p{2.4cm}|
+.. table:: Fields of basic parameter state types in ``Klara``. All four types are parameterized by ``NI<:Integer`` or
+   ``NR<:Real``.
+   :name: _parameter_state_fields
+   
+   +----------------------+----------------+----------------+----------------+----------------+
+   |                      | Basic[S/F]ParameterState{P}                                       |
+   +======================+================+================+================+================+
+   | S<:ValueSupport      | Discrete       | Discrete       | Continuous     | Continuous     |
+   +----------------------+----------------+----------------+----------------+----------------+
+   | F<:VariateForm       | Univariate     | Multivariate   | Univariate     | Multivariate   |
+   +----------------------+----------------+----------------+----------------+----------------+
+   | P (Parameters)       | NI, NR         | NI, NR         | NR             | NR             |
+   +----------------------+----------------+----------------+----------------+----------------+
+   | Field                | Field type                                                        |
+   +----------------------+----------------+----------------+----------------+----------------+
+   | value                | NI             |Vector{NI}      | NR             | Vector{NR}     |
+   +----------------------+----------------+----------------+----------------+----------------+
+   | loglikelihood        | NR             | NR             | NR             | NR             |
+   +----------------------+----------------+----------------+----------------+----------------+
+   | logprior             | NR             | NR             | NR             | NR             |
+   +----------------------+----------------+----------------+----------------+----------------+
+   | logtarget            | NR             | NR             | NR             | NR             |
+   +----------------------+----------------+----------------+----------------+----------------+
+   | gradloglikelihood    | ✗              | ✗              | NR             | Vector{NR}     |
+   +----------------------+----------------+----------------+----------------+----------------+
+   | gradlogprior         | ✗              | ✗              | NR             | Vector{NR}     |
+   +----------------------+----------------+----------------+----------------+----------------+
+   | gradlogtarget        | ✗              | ✗              | NR             | Vector{NR}     |
+   +----------------------+----------------+----------------+----------------+----------------+
+   | tensorloglikelihood  | ✗              | ✗              | NR             | Matrix{NR}     |
+   +----------------------+----------------+----------------+----------------+----------------+
+   | tensorlogprior       | ✗              | ✗              | NR             | Matrix{NR}     |
+   +----------------------+----------------+----------------+----------------+----------------+
+   | tensorlogtarget      | ✗              | ✗              | NR             | Matrix{NR}     |
+   +----------------------+----------------+----------------+----------------+----------------+
+   | dtensorloglikelihood | ✗              | ✗              | NR             | Array{NR, 3}   |
+   +----------------------+----------------+----------------+----------------+----------------+
+   | dtensorlogprior      | ✗              | ✗              | NR             | Array{NR, 3}   |
+   +----------------------+----------------+----------------+----------------+----------------+
+   | dtensorlogtarget     | ✗              | ✗              | NR             | Array{NR, 3}   |
+   +----------------------+----------------+----------------+----------------+----------------+
+   | diagnosticvalues     | Vector         | Vector         | Vector         | Vector         |
+   +----------------------+----------------+----------------+----------------+----------------+
+   | size                 | ✗              | Int            | ✗              | Int            |
+   +----------------------+----------------+----------------+----------------+----------------+
+   | diagnostickeys       | Vector{Symbol} | Vector{Symbol} | Vector{Symbol} | Vector{Symbol} |
+   +----------------------+----------------+----------------+----------------+----------------+
+
+The rest of target-related fields, prefixed by `grad`, `tensor` and `dtensor`, appear only in continuous parameter states and
+correspond to first, second and third degree derivatives of the target. Such target derivatives are utilized by various
+MCMC algorithms.
+
+Fields starting with `grad` store the gradient of the prefixed function. For example, ``state.gradlogtarget`` stores the
+gradient of the log-target evaluated at ``state.value``.
+
+Fields starting with `tensor` refer to the metric tensor of the prefixed function. It is noted that the concept of metric
+tensor is used in an information theoretic context referring to distance between distributions :cite:`gir:cal:rie`. For
+instance, ``state.tensorloglikelihood`` can be used for saving the expected Fisher information matrix, which is equal to the
+negative expected value of the second-order derivative of the log-likelihood evaluated at ``state.value``. Moreover,
+``state.tensorlogprior`` can be utilized for storing the negative Hessian of the log-prior evaluated at ``state.value``. As
+for ``state.dtensorlogtarget``, it is the metric tensor of the log-target, which equals the sum of
+``state.tensorloglikelihood`` and ``state.tensorlogprior``.
+
+Fields prefixed by `dtensor` store all first-order derivatives of the metric tensor referred by the respective
+`tensor`-prefixed field, thus yielding third-order derivatives of the target. For example, ``state.dtensorlogtarget`` saves
+all first-order derivatives of ``state.tensorlogtarget`` evaluated at ``state.value``.
+
+``state.diagnosticvalues`` is a ``Vector`` used for storing diagnostics pertaining to the sampling of a parameter ``state``.
+The ``state.diagnosticvalues`` are labeled by an accordingly ordered ``Vector{Symbol}`` of ``state.diagnostickeys``.
+Conceptually, ``state.diagnostickeys`` and ``state.diagnosticvalues`` can be seen as the keys and values of a dictionary of
+diagnostics but are maintained in two separate vectors to improve MCMC performance. The two vectors are interfaced with a
+``diagnostics()`` function, which zips them together and returns the resulting dictionary.
+
+.. function:: diagnostics(state::ParameterState)
+
+  Return the dictionary of ``state`` diagnostics arising from ``state.diagnostickeys`` and ``state.diagnosticvalues``.
+
+The constructors of ``Klara``’s basic parameter state types are elucidated in the remaining of this section.
+
+BasicDiscUnvParameterState
+------------------------------------------------------------------------------------------
+
+.. function:: BasicDiscUnvParameterState{NI, NR}(value::NI, <optional arguments>)
+
+  Construct a basic discrete univariate parameter state with some ``value``.
+  
+  The parameterization is set as ``NI<:Integer``, ``NR<:Real``.
+  
+  Optional arguments:
+  
+  * ``diagnostickeys::Vector{Symbol}=Symbol[]``: the diagnostic keys of the state.
+  * ``::Type{NR}=Float64``: the element type of target-related fields.
+  * ``diagnosticvalues::Vector=Array(Any, length(diagnostickeys))``: the diagnostic values of the state.
+  
+  Examples:
+   
+  .. code-block:: julia
+   
+    state = BasicDiscUnvParameterState(2, [:accept], Float64, [true])
+    # Klara.BasicDiscUnvParameterState{Int64, Float64}(
+    #   2, NaN, NaN, NaN, Bool[true], [:accept]
+    # )
+     
+    state.value
+    # 2
+    
+    diagnostics(state)
+    # Dict{Symbol, Bool} with 1 entry:
+    #  :accept => true
+
+BasicDiscMuvParameterState
+------------------------------------------------------------------------------------------
+
+.. function:: BasicDiscMuvParameterState{NI, NR}(value::Vector{NI}, <optional arguments>)
+
+  Construct a basic discrete multivariate parameter state with some ``value``.
+  
+  The parameterization is set as ``NI<:Integer``, ``NR<:Real``.
+  
+  Optional arguments:
+  
+  * ``diagnostickeys::Vector{Symbol}=Symbol[]``: the diagnostic keys of the state.
+  * ``::Type{NR}=Float64``: the element type of target-related fields.
+  * ``diagnosticvalues::Vector=Array(Any, length(diagnostickeys))``: the diagnostic values of the state.
+  
+  Examples:
+   
+  .. code-block:: julia
+   
+    state = BasicDiscMuvParameterState(Int64[0, 1], [:accept], Float64, [false])
+    # Klara.BasicDiscMuvParameterState{Int64, Float64}(
+    #   [0, 1], NaN, NaN, NaN, Bool[false], 2, [:accept]
+    # )
+     
+    state.value
+    # 2-element Array{Int64, 1}:
+    #  0
+    #  1
+    
+    diagnostics(state)
+    # Dict{Symbol, Bool} with 1 entry:
+    #  :accept => false
+
+.. function:: BasicDiscMuvParameterState{NI, NR}(size::Int, <optional arguments>)
+
+  Construct a basic discrete multivariate parameter state with with a ``value`` of specified ``size``.
+  
+  The parameterization is set as ``NI<:Integer``, ``NR<:Real``.
+  
+  Optional arguments:
+  
+  * ``diagnostickeys::Vector{Symbol}=Symbol[]``: the diagnostic keys of the state.
+  * ``::Type{NI}=Int``: the element type of the state value.
+  * ``::Type{NR}=Float64``: the element type of target-related fields.
+  * ``diagnosticvalues::Vector=Array(Any, length(diagnostickeys))``: the diagnostic values of the state.
+  
+  Examples:
+   
+  .. code-block:: julia
+  
+    BasicDiscMuvParameterState(3, [:accept], Int32, Float32, [true])
+    # Klara.BasicDiscMuvParameterState{Int32, Float32}(
+    #   3-element Array{Int32, 1}, NaN32, NaN32, NaN32, Bool[true], 3, [:accept]
+    # )
+
+BasicContUnvParameterState
+------------------------------------------------------------------------------------------
+
+.. function:: BasicContUnvParameterState{N<:Real}(value::N, <optional arguments>)
+
+  Construct a basic continuous univariate parameter state with some ``value``.
+  
+  Optional arguments:
+  
+  * ``diagnostickeys::Vector{Symbol}=Symbol[]``: the diagnostic keys of the state.
+  * ``diagnosticvalues::Vector=Array(Any, length(diagnostickeys))``: the diagnostic values of the state.
+  
+  Examples:
+   
+  .. code-block:: julia
+   
+    state = BasicContUnvParameterState(-1.25, [:accept], [false])
+    # Klara.BasicContUnvParameterState{Float64}(
+    #   -1.25,
+    #   NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN,
+    #   Bool[false], [:accept]
+    # )
+     
+    state.value
+    # -1.25
+    
+    diagnostics(state)
+    # Dict{Symbol, Bool} with 1 entry:
+    #  :accept => false
+
+.. function:: BasicContUnvParameterState{N<:Real}(<optional arguments>)
+
+  Construct a basic continuous univariate parameter state with an uninitialized ``value`` (``NaN``).
+  
+  Optional arguments:
+  
+  * ``diagnostickeys::Vector{Symbol}=Symbol[]``: the diagnostic keys of the state.
+  *  ::Type{N}=Float64:: the element type of the state value.
+  * ``diagnosticvalues::Vector=Array(Any, length(diagnostickeys))``: the diagnostic values of the state.
+  
+  Examples:
+   
+  .. code-block:: julia
+   
+    BasicContUnvParameterState()
+    # Klara.BasicContUnvParameterState{Float64}(
+    #   NaN,
+    #   NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN,
+    #   Any[], Symbol[]
+    # )
+
+BasicContMuvParameterState
+------------------------------------------------------------------------------------------
+
+.. function:: BasicContMuvParameterState{N<:Real}(value::Vector{N}, <optional arguments>)
+
+  Construct a basic continuous multivariate parameter state with some ``value``.
+
+  Optional arguments:
+  
+  * ``monitor::Vector{Bool}=fill(false, 9)``: 9-element Boolean vector indicating which of the target-related fields are
+    stored by the state.  
+  * ``diagnostickeys::Vector{Symbol}=Symbol[]``: the diagnostic keys of the state.
+  * ``diagnosticvalues::Vector=Array(Any, length(diagnostickeys))``: the diagnostic values of the state.
+
+  Examples:
+   
+  .. code-block:: julia
+   
+    state = BasicContMuvParameterState(ones(Float32, 2))
+    # Klara.BasicContMuvParameterState{Float32}(
+    #   Float32[1.0f0, 1.0f0],
+    #   NaN32, NaN32, NaN32,
+    #   Float32[], Float32[], Float32[],
+    #   0x0 Array{Float32, 2}, 0x0 Array{Float32, 2}, 0x0 Array{Float32, 2},
+    #   0x0x0 Array{Float32, 3}, 0x0x0 Array{Float32, 3}, 0x0x0 Array{Float32, 3},
+    #   Any[], 2, Symbol[]
+    # )
+
+    state.value
+    # 2-element Array{Float32,1}:
+    #  1.0
+    #  1.0
+
+    size(state.gradloglikelihood)
+    # (0,)
+
+    size(state.gradlogtarget)
+    # (0,)
+
+    diagnostics(state)
+    # Dict{Symbol,Any} with 0 entries
+      
+.. function:: BasicContMuvParameterState{N<:Real}(value::Vector{N}, monitor::Vector{Symbol}, <optional arguments>)
+
+  Construct a basic continuous multivariate parameter state with some ``value`` and tracked target-related fields specified
+  by ``monitor``.
+
+  Optional arguments:
+  
+  * ``diagnostickeys::Vector{Symbol}=Symbol[]``: the diagnostic keys of the state.
+  * ``diagnosticvalues::Vector=Array(Any, length(diagnostickeys))``: the diagnostic values of the state.
+
+  Examples:
+   
+  .. code-block:: julia
+   
+    state = BasicContMuvParameterState(
+      zeros(Float64, 2), [:logtarget, :gradlogtarget]
+    )
+    # Klara.BasicContMuvParameterState{Float64}(
+    #   [0.0, 0.0],
+    #   NaN, NaN, NaN,
+    #   Float64[], Float64[], 2-element Array{Float64, 1},
+    #   0x0 Array{Float64, 2}, 0x0 Array{Float64, 2}, 0x0 Array{Float64, 2},
+    #   0x0x0 Array{Float64, 3}, 0x0x0 Array{Float64, 3}, 0x0x0 Array{Float64, 3},
+    #   Any[], 2, Symbol[]
+    # )
+
+    size(state.gradloglikelihood)
+    # (0,)
+
+    size(state.gradlogtarget)
+    # (2,)
+
+.. function:: BasicContMuvParameterState{N<:Real}(size::Int, <optional arguments>)
+
+  Construct a basic continuous multivariate parameter state with a ``value`` of specified ``size``.
+
+  Optional arguments:
+
+  * ``monitor::Vector{Bool}=fill(false, 9)``: 9-element Boolean vector indicating which of the target-related fields are
+    stored by the state.
+  * ``diagnostickeys::Vector{Symbol}=Symbol[]``: the diagnostic keys of the state.
+  * ``::Type{N}=Float64``: the element type of the state value.
+  * ``diagnosticvalues::Vector=Array(Any, length(diagnostickeys))``: the diagnostic values of the state.
+
+  Examples:
+   
+  .. code-block:: julia
+
+    state = BasicContMuvParameterState(3)
+    # Klara.BasicContMuvParameterState{Float64}(
+    #   3-element Array{Float64, 1},
+    #   NaN, NaN, NaN,
+    #   Float64[], Float64[], Float64[],
+    #   0x0 Array{Float64, 2}, 0x0 Array{Float64, 2}, 0x0 Array{Float64, 2},
+    #   0x0x0 Array{Float64, 3}, 0x0x0 Array{Float64, 3}, 0x0x0 Array{Float64, 3},
+    #   Any[], 3, Symbol[]
+    # )
+    
+    state.size
+    # 3
+
+    diagnostics(state)
+    # Dict{Symbol,Any} with 0 entries
+    
+.. function:: BasicContMuvParameterState{N<:Real}(size::Int, monitor::Vector{Symbol}, <optional arguments>)
+
+  Construct a basic continuous multivariate parameter state with a ``value`` of specified ``size`` and tracked target-related
+  fields specified by ``monitor``.
+
+  Optional arguments:
+
+  * ``diagnostickeys::Vector{Symbol}=Symbol[]``: the diagnostic keys of the state.
+  * ``::Type{N}=Float64``: the element type of the state value.
+  * ``diagnosticvalues::Vector=Array(Any, length(diagnostickeys))``: the diagnostic values of the state.
+
+  Examples:
+   
+  .. code-block:: julia
+
+    BasicContMuvParameterState(
+      3, [:loglikelihood, :logtarget], [:accept], Float16, [true]
+    )
+    # Klara.BasicContMuvParameterState{Float16}(
+    #   3-element Array{Float16, 1}
+    #   NaN16, NaN16, NaN16,
+    #   Float16[], Float16[], Float16[],
+    #   0x0 Array{Float16, 2}, 0x0 Array{Float16, 2}, 0x0 Array{Float16, 2},
+    #   0x0x0 Array{Float16, 3}, 0x0x0 Array{Float16, 3}, 0x0x0 Array{Float16, 3},
+    #   Bool[true], 3, [:accept]
+    # )
